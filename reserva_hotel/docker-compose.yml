@@ -1,0 +1,35 @@
+services:
+  reservas:
+    build: ./reservas
+    ports:
+      - "5002:5000"
+    env_file:
+      - .env
+    depends_on:
+      - mysql_reservas
+      - usuarios
+
+  usuarios:
+    build: ./usuarios
+    ports:
+      - "5001:5000"
+    env_file:
+      - .env
+    depends_on:
+      - mysql_usuarios
+
+  mysql_reservas:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: db_reservas
+    ports:
+      - "3309:3306"
+
+  mysql_usuarios:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: db_usuarios
+    ports:
+      - "3310:3306"
