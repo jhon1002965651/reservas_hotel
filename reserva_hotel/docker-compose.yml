@@ -1,4 +1,15 @@
 services:
+
+  gateway:
+    build: ./gateway
+    ports:
+        - "5000:5000"
+    environment:
+        RESERVAS_URL: ${RESERVAS_URL}
+        USUARIOS_URL: ${USUARIOS_URL}
+    depends_on:
+        - reservas
+        - usuarios
   reservas:
     build: ./reservas
     ports:
@@ -18,6 +29,7 @@ services:
     depends_on:
       - mysql_usuarios
 
+
   mysql_reservas:
     image: mysql:8
     environment:
@@ -25,6 +37,9 @@ services:
       MYSQL_DATABASE: db_reservas
     ports:
       - "3309:3306"
+    volumes:
+      - reservas_mysql_data:/var/lib/mysql # <-- Añadir esto
+
 
   mysql_usuarios:
     image: mysql:8
@@ -33,3 +48,10 @@ services:
       MYSQL_DATABASE: db_usuarios
     ports:
       - "3310:3306"
+    volumes:
+      - usuarios_mysql_data:/var/lib/mysql
+volumes:
+  reservas_mysql_data:
+  usuarios_mysql_data:
+
+

@@ -2,6 +2,7 @@ import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from database import conectar
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -23,6 +24,7 @@ def obtener_usuarios():
 # 2. OBTENER UN USUARIO POR SU DOCUMENTO DE IDENTIDAD (ID)
 @app.route('/usuarios/<id>', methods=['GET'])
 def obtener_usuario_por_id(id):
+   # time.sleep(5)
     try:
         db = conectar()
         cursor = db.cursor(dictionary=True)
@@ -35,6 +37,7 @@ def obtener_usuario_por_id(id):
         return jsonify({"error": "Usuario no encontrado"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
 
 # 3. CREAR NUEVO USUARIO (Con Documento, Contraseña y Rol)
 @app.route('/usuarios', methods=['POST'])
