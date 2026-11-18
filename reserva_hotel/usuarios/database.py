@@ -12,7 +12,8 @@ def conectar():
                 password = os.getenv("DB_PASSWORD_USUARIOS", "root"),
                 database = os.getenv("DB_NAME_USUARIOS", "db_usuarios")
             )
+
             return conexion 
         except mysql.connector.Error:
             print("La base de datos de usuarios aún está cargando...")
-            time.sleep(3)
+            time.sleep(2)

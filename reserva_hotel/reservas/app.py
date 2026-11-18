@@ -1,5 +1,6 @@
 import os
 import requests
+import pybreaker
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from database import conectar
@@ -8,6 +9,8 @@ app = Flask(__name__)
 CORS(app)
 
 USUARIOS_SERVICE_URL = os.getenv("USUARIOS_SERVICE_URL", "http://usuarios:5000")
+
+circuito_usuarios = pybreaker.CircuitBreaker(fail_max=int(os.getenv("CB_MAX_FALLOS", "3")), reset_timeout=int(os.getenv("CB_RECUPERACION", "30")), throw_new_error_on_trip=False)
 
 # 1. OBTENER TODAS LAS RESERVAS
 @app.route('/reservas', methods=['GET'])
@@ -84,45 +87,64 @@ def actualizar_estado(id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 5. CONSULTA DISTRIBUIDA (Detalles consolidados)
-@app.route('/reservas/<int:id>/detalles', methods=['GET'])
+
+@app.route("/reservas/<int:id>/detalles", methods=["GET"])
 def detalles_reserva(id):
+    tiempo_maximo = float(os.getenv("USUARIOS_TIMEOUT", "2"))
+    
+    conexion = conectar()
+    if not conexion:
+        return jsonify({"mensaje": "No se pudo conectar a la base de datos"}), 500
+
+    cursor = conexion.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM reservas WHERE id = %s", (id,))
+    reserva = cursor.fetchone()
+    cursor.close()
+    conexion.close()
+
+    if reserva is None:
+        return jsonify({"mensaje": "Reserva no encontrada"}), 404
+
+    usuario_id = reserva["usuario_id"]
+    url = f"{USUARIOS_SERVICE_URL}/usuarios/{usuario_id}"
+
     try:
-        db = conectar()
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("SELECT id, habitacion, usuario_id, DATE_FORMAT(fecha_reserva, '%Y-%m-%d') as fecha_reserva, estado FROM reservas WHERE id = %s", (id,))
-        reserva = cursor.fetchone()
-        cursor.close()
-        db.close()
+        with circuito_usuarios.calling():
+            respuesta = requests.get(url, timeout=tiempo_maximo)
+            if respuesta.status_code >= 500:
+                respuesta.raise_for_status()
+    except pybreaker.CircuitBreakerError:
+        return jsonify({"mensaje": "Circuito abierto. Servicio de usuarios no disponible"}), 503
+    except requests.exceptions.Timeout:
+        return jsonify({"mensaje": "El servicio de usuarios no responde"}), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({"mensaje": "No se pudo conectar con el servicio de usuarios"}), 503
+    except requests.exceptions.HTTPError:
+        return jsonify({"mensaje": "Error en el servicio de usuarios"}), 502
 
-        if not reserva:
-            return jsonify({"error": "Reserva no encontrada"}), 404
+    if respuesta.status_code == 404:
+        return jsonify({"mensaje": "Usuario no encontrado"}), 404
+    if respuesta.status_code != 200:
+        return jsonify({"mensaje": "Error en el servicio de usuarios"}), 502
 
-        # Petición HTTP interna al microservicio de Usuarios
-        resp = requests.get(f"{USUARIOS_SERVICE_URL}/usuarios/{reserva['usuario_id']}")
-        if resp.status_code == 200:
-            usuario = resp.json()
-            reserva['cliente'] = f"{usuario['nombre']} ({usuario['correo']})"
-        else:
-            reserva['cliente'] = "Cliente desconocido"
+    usuario = respuesta.json()
 
-        return jsonify(reserva), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    # Formato de campos tipo fecha a string para prevenir fallos al serializar JSON
+    if "fecha_reserva" in reserva and reserva["fecha_reserva"] is not None:
+        reserva["fecha_reserva"] = str(reserva["fecha_reserva"])
 
-# 6. ELIMINAR RESERVA
-@app.route('/reservas/<int:id>', methods=['DELETE'])
-def eliminar_reserva(id):
-    try:
-        db = conectar()
-        cursor = db.cursor()
-        cursor.execute("DELETE FROM reservas WHERE id = %s", (id,))
-        db.commit()
-        cursor.close()
-        db.close()
-        return jsonify({"mensaje": "Reserva eliminada exitosamente"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "reserva": reserva,
+        "usuario": usuario
+    }), 200
 
+@app.route("/reservas/circuito/usuarios", methods=["GET"])
+def estado_circuito_usuarios():
+    return jsonify({
+        "estado": circuito_usuarios.current_state.upper(),
+        "fallos_consecutivos": circuito_usuarios.fail_counter,
+        "max_fallos_permitidos": circuito_usuarios.fail_max,
+        "periodo_recuperacion": circuito_usuarios.reset_timeout
+    }), 200
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
