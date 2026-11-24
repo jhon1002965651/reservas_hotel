@@ -1,19 +1,38 @@
 # Hotel Grand Plaza — Sistema de Reservas Distribuido
 
 ## 1. Descripción del sistema
-La gestión de reservas de un hotel suele depender de procesos manuales donde no existe un registro centralizado de clientes, las reservas se duplican o pierden y el personal no puede consultar ni actualizar estados en tiempo real.
 
-**Hotel Grand Plaza** resuelve este problema mediante una arquitectura distribuida basada en microservicios independientes, un **API Gateway** como punto único de entrada en el puerto `5000`, persistencia aislada por servicio y mecanismos de tolerancia a fallos (**Timeout** y **Circuit Breaker**).
+La gestión tradicional de reservas hoteleras suele presentar problemas de descentralización, duplicidad de reservas sobre una misma habitación en la misma fecha, falta de visibilidad sobre la disponibilidad real y fallos en cascada cuando algún módulo deja de responder.
 
-### Funcionalidades principales
-- **Clientes:** Inicio de sesión, registro de nuevas reservas y consulta de su historial de reservas.
-- **Administradores (`admin`):** Visualización global de todas las reservas, filtrado por documento y actualización de estado (`confirmada`, `pagada`, `cancelada`).
-- **Administradores del sistema (`sysadmin`):** Gestión completa (CRUD) de cuentas de usuario y asignación de roles (`cliente`, `admin`, `sysadmin`).
-- **Consulta distribuida y tolerancia a fallos:** Consolidación de datos de reserva junto con la información del cliente mediante comunicación HTTP protegida con Timeout y Circuit Breaker.
+**Hotel Grand Plaza** soluciona esta problemática mediante una arquitectura distribuida basada en **microservicios independientes**, un **API Gateway** como punto único de entrada (`http://localhost:5000`), persistencia aislada por dominio en contenedores **MySQL 8** y mecanismos de tolerancia a fallos (**Timeout** y **Circuit Breaker** con `pybreaker`).
 
-### Decisiones de arquitectura
-- **Punto de entrada único:** Los microservicios y bases de datos no exponen puertos hacia el host; únicamente `home` (`8080`) y `gateway` (`5000`) son accesibles externamente.
-- **Aislamiento de datos:** Cada microservicio administra exclusivamente su propia base de datos MySQL 8.
+### Funcionalidades principales por rol
+* **Cliente (`cliente`):** Inicio de sesión, consulta de catálogo de habitaciones disponibles, creación de nuevas reservas (con validación distribuida de disponibilidad), consulta de su historial y cancelación de reservas.
+* **Administrador (`admin`):** Visualización global de todas las reservas, consulta detallada consolidada (reserva + datos del cliente + datos de la habitación), actualización de estado (`confirmada`, `pagada`, `cancelada`) con sincronización automática del estado de la habitación, y gestión CRUD completa del inventario de habitaciones.
+* **Administrador del sistema (`sysadmin`):** Gestión CRUD completa de cuentas de usuario y asignación de roles (`cliente`, `admin`, `sysadmin`).
+
+---
+
+## 2. Arquitectura completa del sistema
+
+Todos los contenedores se orquestan mediante **Docker Compose** dentro de una red interna compartida (`default`), donde los servicios se descubren por nombre de contenedor (`usuarios`, `reservas`, `habitaciones`, `mysql_*`). La interfaz web (`index.html`) consume exclusivamente el **API Gateway** en el puerto `5000`.
+
+```mermaid
+graph TD
+    U["Usuario / Navegador Web"] --> H["Vista Home - index.html"]
+    H -->|"HTTP REST - Puerto 5000"| GW["API Gateway - gateway:5000<br/>Timeout global: 5s | Manejo 503/504"]
+
+    GW -->|"/usuarios, /login"| MS_U["Microservicio Usuarios<br/>usuarios:5000 - Host 5001<br/>CRUD Usuarios y Autenticación"]
+    GW -->|"/reservas/*"| MS_R["Microservicio Reservas<br/>reservas:5000 - Host 5002<br/>CRUD Reservas y Orquestación"]
+    GW -->|"/habitaciones/*"| MS_H["Microservicio Habitaciones<br/>habitaciones:5000 - Host 5003<br/>CRUD Habitaciones y Disponibilidad"]
+
+    MS_R -->|"GET /usuarios/id<br/>Timeout: 2s + Circuit Breaker"| MS_U
+    MS_R -->|"GET y PUT /habitaciones/numero/...<br/>Timeout: 2s + Circuit Breaker"| MS_H
+
+    MS_U --> DB_U[("MySQL 8: mysql_usuarios<br/>BD: db_usuarios<br/>Vol: usuarios_mysql_data")]
+    MS_R --> DB_R[("MySQL 8: mysql_reservas<br/>BD: db_reservas<br/>Vol: reservas_mysql_data")]
+    MS_H --> DB_H[("MySQL 8: mysql_habitaciones<br/>BD: db_habitaciones<br/>Vol: habitaciones_mysql_data")]
+```
 
 ---
 
@@ -21,157 +40,238 @@ La gestión de reservas de un hotel suele depender de procesos manuales donde no
 
 | Microservicio | Responsabilidad | Base de datos | Comunicación con otros servicios | Estado |
 | :--- | :--- | :--- | :--- | :--- |
-| **Home** (`home`) | Interfaz web para clientes, administradores y sysadmin. | Ninguna (cliente web) | Consume el **API Gateway** (`http://localhost:5000`). | Implementado |
-| **API Gateway** (`gateway`) | Punto de entrada único (`:5000`), enrutamiento HTTP, preservación de códigos de estado y manejo de indisponibilidad (`503`/`504`). | Ninguna | Redirige peticiones hacia **Usuarios** y **Reservas** por red interna. | Implementado |
-| **Usuarios** (`usuarios`) | Gestión CRUD de cuentas, roles y autenticación (`login`). | `db_usuarios` (MySQL 8) | Responde consultas HTTP de **Reservas** sobre datos de clientes. | Implementado |
-| **Reservas** (`reservas`) | Gestión CRUD de reservas de habitaciones, estados y detalles consolidados. | `db_reservas` (MySQL 8) | Consulta a **Usuarios** (`GET /usuarios/{id}`) con Timeout y Circuit Breaker. | Implementado |
+| **Vista Home** (`index.html`) | Interfaz web cliente con vistas diferenciadas por rol (`cliente`, `admin`, `sysadmin`). | Ninguna (cliente web) | Consume el **API Gateway** (`http://localhost:5000`). | Implementado |
+| **API Gateway** (`gateway`) | Punto de entrada único (`:5000`), enrutamiento HTTP, preservación de códigos de estado y gestión de indisponibilidad (`503`/`504`). | Ninguna | Reenvía peticiones hacia **Usuarios**, **Reservas** y **Habitaciones** por red interna Docker. | Implementado |
+| **Usuarios** (`usuarios`) | Gestión CRUD de cuentas de usuario, roles y autenticación (`POST /login`). | `db_usuarios` (MySQL 8) | Responde consultas HTTP (`GET /usuarios/{id}`) desde **Reservas**. | Implementado |
+| **Habitaciones** (`habitaciones`) | Gestión CRUD del inventario de habitaciones, tarifas, capacidad y estado (`disponible` / `ocupada`). | `db_habitaciones` (MySQL 8) | Responde consultas y actualizaciones de estado desde **Reservas**. | Implementado |
+| **Reservas** (`reservas`) | Gestión CRUD de reservas, validación de disponibilidad, sincronización de habitaciones y consulta consolidada. | `db_reservas` (MySQL 8) | Consulta a **Usuarios** y **Habitaciones** vía HTTP con **Timeout** y **Circuit Breaker**. | Implementado |
 
 ---
 
 ## 4. Endpoints y manejo de errores HTTP
 
-Todas las peticiones externas pasan a través del **API Gateway** (`http://localhost:5000`).
+Todas las solicitudes externas ingresan a través del **API Gateway** (`http://localhost:5000`).
 
-### Códigos HTTP estandarizados
-| Código | Significado | Uso en el sistema |
+### Códigos de estado HTTP estandarizados
+
+| Código | Estado | Contexto de uso en la aplicación |
 | :--- | :--- | :--- |
-| `200` | OK | Consulta, actualización o eliminación exitosa. |
-| `201` | Created | Registro exitoso de un usuario o una reserva (`POST`). |
-| `400` | Bad Request | Datos obligatorios faltantes o formato inválido. |
-| `401` | Unauthorized | Credenciales incorrectas en `POST /login`. |
-| `404` | Not Found | El identificador de usuario o reserva no existe en la base de datos. |
-| `500` | Internal Server Error | Error interno no controlado en el servidor o base de datos. |
-| `503` | Service Unavailable | Microservicio destino caído o **Circuit Breaker en estado `OPEN`**. |
-| `504` | Gateway Timeout | Tiempo máximo de espera excedido en comunicación entre servicios. |
+| `200` | OK | Consulta (`GET`), actualización (`PUT`), eliminación (`DELETE`) o login exitoso. |
+| `201` | Created | Registro exitoso de un usuario, habitación o reserva (`POST`). |
+| `400` | Bad Request | Campos obligatorios faltantes o tipos de datos inválidos en la solicitud. |
+| `401` | Unauthorized | Credenciales inválidas en `POST /login`. |
+| `404` | Not Found | El identificador de usuario, habitación o reserva no existe en la base de datos. |
+| `409` | Conflict | Habitación duplicada, habitación no disponible o conflicto de reserva en la misma fecha. |
+| `500` | Internal Server Error | Error interno de base de datos o excepción no controlada en el servidor. |
+| `502` | Bad Gateway | Respuesta de error inesperada recibida desde un microservicio dependiente. |
+| `503` | Service Unavailable | Servicio destino caído/inaccesible o **Circuit Breaker en estado `OPEN`**. |
+| `504` | Gateway Timeout | Tiempo máximo de espera (`Timeout`) excedido al esperar respuesta de otro servicio. |
 
-### Servicio Usuarios (vía Gateway: `http://localhost:5000`)
-| Método | Endpoint | Descripción | Entrada (JSON) | Respuesta |
-| :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/usuarios` | Listar todos los usuarios | Ninguna | `200` Lista de usuarios |
-| `GET` | `/usuarios/{id}` | Consultar usuario por documento | Parámetro `id` | `200` Objeto usuario / `404` No encontrado |
-| `POST` | `/usuarios` | Crear nuevo usuario | `{id, nombre, correo, contrasena, rol}` | `201` Confirmación / `400` Datos inválidos |
-| `PUT` | `/usuarios/{id}` | Actualizar datos o rol de usuario | `{nombre, correo, rol, contrasena}` | `200` Actualizado / `404` No encontrado |
-| `DELETE` | `/usuarios/{id}` | Eliminar usuario por documento | Parámetro `id` | `200` Eliminado / `404` No encontrado |
-| `POST` | `/login` | Autenticar usuario | `{correo, contrasena}` | `200` Datos y rol / `401` Credenciales inválidas |
+### Endpoints del API Gateway (`gateway` — `:5000`)
 
-### Servicio Reservas (vía Gateway: `http://localhost:5000`)
-| Método | Endpoint | Descripción | Entrada (JSON) | Respuesta |
+| Método | Ruta pública | Servicio destino | Descripción |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | `gateway` | Verifica el estado activo del Gateway y las URLs internas configuradas. |
+| `ANY` | `/usuarios`, `/usuarios/{ruta}` | `http://usuarios:5000` | Enruta operaciones CRUD hacia el microservicio Usuarios. |
+| `POST` | `/login` | `http://usuarios:5000` | Enruta la autenticación de credenciales hacia Usuarios. |
+| `ANY` | `/habitaciones`, `/habitaciones/{ruta}` | `http://habitaciones:5000` | Enruta operaciones CRUD y consultas por número hacia Habitaciones. |
+| `ANY` | `/reservas`, `/reservas/{ruta}` | `http://reservas:5000` | Enruta operaciones CRUD, detalles consolidados y estado de circuitos hacia Reservas. |
+
+### Endpoints del Microservicio Usuarios (`usuarios`)
+
+| Método | Endpoint | Operación | Entrada (JSON) | Respuestas |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/reservas` | Listar todas las reservas | Ninguna | `200` Lista de reservas |
-| `GET` | `/reservas/{id}` | Consultar una reserva por ID | Parámetro `id` | `200` Objeto reserva / `404` No encontrada |
-| `GET` | `/reservas/usuario/{usuario_id}` | Listar reservas de un cliente | Parámetro `usuario_id` | `200` Lista filtrada de reservas |
-| `GET` | `/reservas/{id}/detalles` | Reserva + datos del cliente (consulta distribuida a Usuarios) | Parámetro `id` | `200` Reserva consolidada / `404` / `503` / `504` |
-| `POST` | `/reservas` | Crear nueva reserva | `{habitacion, usuario_id, fecha_reserva, estado}` | `201` Reserva creada / `400` Datos inválidos |
-| `PUT` | `/reservas/{id}/estado` | Cambiar estado de una reserva | `{estado}` | `200` Estado actualizado / `404` No encontrada |
-| `DELETE` | `/reservas/{id}` | Eliminar una reserva | Parámetro `id` | `200` Eliminada / `404` No encontrada |
-| `GET` | `/reservas/circuit-breaker` | Consultar estado actual del Circuit Breaker | Ninguna | `200` `{estado, fallos_consecutivos, ...}` |
+| `GET` | `/usuarios` | Read (Listar) | Ninguna | `200` Lista de usuarios / `500` |
+| `GET` | `/usuarios/{id}` | Read (Detalle) | Parámetro `id` (documento) | `200` Objeto usuario / `404` No encontrado |
+| `POST` | `/usuarios` | Create | `{"id", "nombre", "correo", "contrasena", "rol"}` | `201` Usuario creado / `400` Datos faltantes |
+| `PUT` | `/usuarios/{id}` | Update | `{"nombre", "correo", "rol", "contrasena"}` | `200` Actualizado / `400` Sin campos |
+| `DELETE` | `/usuarios/{id}` | Delete | Parámetro `id` | `200` Eliminado / `500` |
+| `POST` | `/login` | Autenticación* | `{"correo", "contrasena"}` | `200` Usuario y rol / `401` Inválido |
+
+*\*Nota: `POST /login` corresponde a la responsabilidad de autenticación del dominio de usuarios.*
+
+### Endpoints del Microservicio Habitaciones (`habitaciones`)
+
+| Método | Endpoint | Operación | Entrada (JSON / Query) | Respuestas |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/habitaciones` | Read (Listar) | Query opcional `?estado=disponible` | `200` Lista de habitaciones / `500` |
+| `GET` | `/habitaciones/{id}` | Read (Por ID) | Parámetro numérico `id` | `200` Objeto habitación / `404` |
+| `GET` | `/habitaciones/numero/{numero}` | Read (Por número) | Parámetro `numero` (ej. `101`) | `200` Objeto habitación / `404` |
+| `POST` | `/habitaciones` | Create | `{"numero", "tipo", "capacidad", "precio", "estado", "descripcion"}` | `201` Creada / `400` / `409` Duplicada |
+| `PUT` | `/habitaciones/{id}` | Update | Campos a modificar de la habitación | `200` Actualizada / `404` / `409` |
+| `PUT` | `/habitaciones/numero/{numero}/estado` | Update estado* | `{"estado": "ocupada" \| "disponible"}` | `200` Estado actualizado / `404` |
+| `DELETE` | `/habitaciones/{id}` | Delete | Parámetro numérico `id` | `200` Eliminada / `404` |
+
+*\*Nota: `GET` y `PUT` por `/numero/{numero}` permiten la sincronización desacoplada con el microservicio Reservas.*
+
+### Endpoints del Microservicio Reservas (`reservas`)
+
+| Método | Endpoint | Operación | Entrada (JSON) | Respuestas |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/reservas` | Read (Listar) | Ninguna | `200` Lista de todas las reservas |
+| `GET` | `/reservas/usuario/{usuario_id}` | Read (Por cliente) | Parámetro `usuario_id` | `200` Reservas del cliente |
+| `GET` | `/reservas/{id}/detalles` | Read consolidado* | Parámetro `id` | `200` `{reserva, usuario, habitacion}` / `404` / `503` / `504` |
+| `POST` | `/reservas` | Create | `{"habitacion", "usuario_id", "fecha_reserva", "estado"}` | `201` Reserva creada / `400` / `404` / `409` / `503` / `504` |
+| `PUT` | `/reservas/{id}/estado` | Update estado* | `{"estado": "confirmada" \| "pagada" \| "cancelada"}` | `200` Estado actualizado / `404` |
+| `DELETE` | `/reservas/{id}` | Delete | Parámetro `id` | `200` Cancelada y habitación liberada / `404` |
+| `GET` | `/reservas/circuito/usuarios` | Monitoreo CB* | Ninguna | `200` Estado del Circuit Breaker de Usuarios |
+| `GET` | `/reservas/circuito/habitaciones` | Monitoreo CB* | Ninguna | `200` Estado del Circuit Breaker de Habitaciones |
+
+*\*Nota: Los endpoints de detalles consolidados, cambio de estado y monitoreo de circuitos responden a la orquestación de negocio y observabilidad de tolerancia a fallos.*
 
 ---
 
 ## 5. Bases de datos
 
-Cada microservicio opera con su propio contenedor MySQL 8 independiente:
+Cada microservicio administra exclusivamente su propia instancia **MySQL 8** independiente, sin compartir tablas ni realizar consultas cruzadas entre esquemas:
 
-| Microservicio | Base de datos | Tabla principal | Columnas | Operaciones implementadas |
-| :--- | :--- | :--- | :--- | :--- |
-| **Usuarios** | `db_usuarios` | `usuarios` | `id` (PK), `nombre`, `correo`, `contrasena`, `rol` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
-| **Reservas** | `db_reservas` | `reservas` | `id` (PK AI), `habitacion`, `usuario_id`, `fecha_reserva`, `estado` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| Microservicio | Contenedor / Puerto | Base de datos | Tabla principal | Columnas principales | Operaciones implementadas |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Usuarios** | `mysql_usuarios` (`3310:3306`) | `db_usuarios` | `usuarios` | `id` (PK), `nombre`, `correo`, `contrasena`, `rol` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| **Reservas** | `mysql_reservas` (`3309:3306`) | `db_reservas` | `reservas` | `id` (PK AI), `habitacion`, `usuario_id`, `fecha_reserva`, `estado` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| **Habitaciones** | `mysql_habitaciones` (`3311:3306`) | `db_habitaciones` | `habitaciones` | `id` (PK AI), `numero` (UNIQUE), `tipo`, `capacidad`, `precio`, `estado`, `descripcion` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
 
 ---
 
 ## 6. Persistencia
 
-La persistencia de datos se garantiza mediante volúmenes nombrados en `docker-compose.yml`:
-- `vol_usuarios` montado en `/var/lib/mysql` del contenedor `mysql_usuarios`.
-- `vol_reservas` montado en `/var/lib/mysql` del contenedor `mysql_reservas`.
+La persistencia de datos se garantiza mediante volúmenes nombrados declarados en `docker-compose.yml`:
+* `usuarios_mysql_data` montado en `/var/lib/mysql` de `mysql_usuarios`.
+* `reservas_mysql_data` montado en `/var/lib/mysql` de `mysql_reservas`.
+* `habitaciones_mysql_data` montado en `/var/lib/mysql` de `mysql_habitaciones`.
 
-### Prueba de persistencia verificada
-1. Se registran usuarios y reservas mediante `POST /usuarios` y `POST /reservas`.
-2. Se detienen y recrean los contenedores de aplicación sin eliminar volúmenes (`docker compose stop usuarios reservas` y `docker compose up -d`).
-3. Al consultar nuevamente `GET /usuarios` y `GET /reservas`, todos los registros previos permanecen intactos.
+### Verificación de persistencia
+1. Se registran registros nuevos vía `POST /usuarios`, `POST /habitaciones` y `POST /reservas`.
+2. Se detienen los contenedores de aplicación sin eliminar volúmenes (`docker compose stop usuarios habitaciones reservas` o `docker compose down` sin `-v`).
+3. Se vuelven a iniciar los servicios (`docker compose up -d`).
+4. Al consultar `GET /usuarios`, `GET /habitaciones` y `GET /reservas`, todos los registros previos permanecen intactos.
 
 ---
 
 ## 7. Comunicación entre servicios
 
+La comunicación entre microservicios se realiza exclusivamente mediante peticiones HTTP REST internas utilizando la resolución DNS nativa de Docker Compose (`http://usuarios:5000`, `http://habitaciones:5000`, `http://reservas:5000`):
+
 | Servicio solicitante | Servicio destino | Endpoint | Método HTTP | Información intercambiada |
 | :--- | :--- | :--- | :--- | :--- |
-| **Reservas** | **Usuarios** | `/usuarios/{usuario_id}` | `GET` | **Envía:** `usuario_id` en la URL.<br>**Recibe:** JSON `{id, nombre, correo, rol}` para enriquecer `GET /reservas/{id}/detalles`. |
-| **API Gateway** | **Usuarios** | `/usuarios/*`, `/login` | `GET`, `POST`, `PUT`, `DELETE` | Reenvía cabeceras, parámetros y cuerpo JSON del cliente; retorna respuesta y código HTTP original. |
-| **API Gateway** | **Reservas** | `/reservas/*` | `GET`, `POST`, `PUT`, `DELETE` | Reenvía cabeceras, parámetros y cuerpo JSON del cliente; retorna respuesta y código HTTP original. |
+| **Reservas** | **Habitaciones** | `/habitaciones/numero/{numero}` | `GET` | **Envía:** número de habitación.<br>**Recibe:** datos y estado (`disponible`/`ocupada`) antes de crear una reserva o al consultar detalles. |
+| **Reservas** | **Habitaciones** | `/habitaciones/numero/{numero}/estado` | `PUT` | **Envía:** `{"estado": "ocupada" \| "disponible"}`.<br>**Recibe:** confirmación de sincronización al crear, actualizar o eliminar una reserva. |
+| **Reservas** | **Usuarios** | `/usuarios/{usuario_id}` | `GET` | **Envía:** documento del cliente.<br>**Recibe:** `{id, nombre, correo, rol}` para consolidar `GET /reservas/{id}/detalles`. |
+| **API Gateway** | **Usuarios / Reservas / Habitaciones** | `/usuarios/*`, `/login`, `/reservas/*`, `/habitaciones/*` | `GET`, `POST`, `PUT`, `DELETE` | Reenvía parámetros, cuerpo JSON y método original del cliente; preserva el código HTTP de respuesta. |
 
 ---
 
 ## 8. Timeout y Circuit Breaker
 
-La comunicación síncrona entre **Reservas** y **Usuarios** (`GET /reservas/{id}/detalles`) está protegida mediante **Timeout** y **Circuit Breaker**.
+La tolerancia a fallos está implementada en el microservicio **Reservas** mediante la librería **`pybreaker`** y tiempos máximos de espera (`timeout`) en `requests`, además del timeout global de `5 s` en el **API Gateway**.
 
-### Parámetros configurados
+### Configuración implementada
+
 | Parámetro | Valor implementado | Descripción |
 | :--- | :--- | :--- |
-| **Servicio que realiza la solicitud** | `reservas` | Microservicio consumidor de datos de cliente. |
-| **Servicio protegido** | `usuarios` | Dependencia consultada en `GET /usuarios/{usuario_id}`. |
-| **Timeout configurado** | `3 segundos` | Tiempo máximo de espera de respuesta HTTP (`requests.get(..., timeout=3)`). Si se supera, retorna `504 Gateway Timeout`. |
-| **Umbral de fallos (`failure_threshold`)** | `3 fallos` | Número de fallos consecutivos necesarios para abrir el circuito. |
-| **Tiempo de recuperación (`recovery_timeout`)** | `30 segundos` | Tiempo que el circuito permanece en `OPEN` antes de pasar a `HALF_OPEN`. |
+| **Servicio que realiza la solicitud** | `reservas` | Microservicio consumidor de Usuarios y Habitaciones. |
+| **Servicios protegidos** | `usuarios` y `habitaciones` | Circuitos independientes: `circuito_usuarios` y `circuito_habitaciones`. |
+| **Timeout configurado (Reservas → Servicios)** | `2 segundos` | Variables `USUARIOS_TIMEOUT=2` y `HABITACIONES_TIMEOUT=2`. Retorna `504 Gateway Timeout` si se excede. |
+| **Timeout configurado (API Gateway)** | `5 segundos` | `requests.request(..., timeout=5)` en `gateway/app.py`. Retorna `504` si el servicio tarda demasiado. |
+| **Umbral de fallos (`fail_max`)** | `3 fallos` | Variable `CB_MAX_FALLOS=3`. Fallos consecutivos necesarios para abrir el circuito. |
+| **Tiempo de recuperación (`reset_timeout`)** | `30 segundos` | Variable `CB_RECUPERACION=30`. Tiempo en estado `OPEN` antes de pasar a `HALF_OPEN`. |
 
-### Comportamiento de los estados del Circuit Breaker
-1. **`CLOSED` (Normal):** Las solicitudes hacia `usuarios` se ejecutan normalmente. Cada fallo técnico (conexión rechazada, `500` o timeout) incrementa el contador de fallos; una respuesta exitosa lo reinicia a `0`.
-2. **`OPEN` (Circuito abierto):** Al alcanzar **3 fallos consecutivos**, el circuito se abre. Durante los siguientes **15 segundos**, las peticiones se rechazan inmediatamente con **`503 Service Unavailable`** sin esperar el timeout de red.
-3. **`HALF_OPEN` (Semi-abierto):** Transcurridos los 15 segundos, el circuito permite **1 solicitud de prueba** hacia `usuarios`. Si responde correctamente (`200` o `404`), el circuito vuelve a **`CLOSED`**; si vuelve a fallar, retorna a **`OPEN`**.
+### Estados del Circuit Breaker y ciclo de recuperación
+1. **`CLOSED` (Normal):** Las peticiones hacia `usuarios` y `habitaciones` fluyen normalmente. Cada fallo técnico (timeout, error de conexión o HTTP `>= 500`) incrementa `fallos_consecutivos`; una petición exitosa lo reinicia a `0`.
+2. **`OPEN` (Circuito abierto):** Al acumular **3 fallos consecutivos**, el circuito se abre. Durante **30 segundos**, las solicitudes protegidas fallan rápido (*fail-fast*) con **`503 Service Unavailable`** sin esperar tiempos muertos de red.
+3. **`HALF_OPEN` (Semi-abierto):** Pasados los **30 segundos**, el circuito permite una solicitud de prueba. Si la dependencia responde correctamente, el circuito regresa a **`CLOSED`**; si vuelve a fallar, retorna inmediatamente a **`OPEN`**.
+
+### Endpoints de inspección de circuitos (vía Gateway)
+* `GET http://localhost:5000/reservas/circuito/usuarios`
+* `GET http://localhost:5000/reservas/circuito/habitaciones`
+
+### Procedimiento de prueba de fallos y recuperación
+```bash
+# 1. Verificar estado inicial CLOSED
+curl http://localhost:5000/reservas/circuito/usuarios
+
+# 2. Detener el microservicio Usuarios sin borrar volúmenes
+docker compose stop usuarios
+
+# 3. Ejecutar 3 solicitudes a /reservas/{id}/detalles para provocar apertura (OPEN)
+curl http://localhost:5000/reservas/1/detalles
+
+# 4. Confirmar estado OPEN y rechazo inmediato (HTTP 503)
+curl http://localhost:5000/reservas/circuito/usuarios
+
+# 5. Restablecer el microservicio y esperar 30 segundos (HALF_OPEN -> CLOSED)
+docker compose start usuarios
+curl http://localhost:5000/reservas/1/detalles
+```
 
 ---
 
 ## 9. API Gateway
 
-El servicio `gateway` actúa como fachada única del sistema distribuido en `http://localhost:5000`:
-
-| Ruta pública en Gateway | Servicio interno destino | Métodos soportados |
-| :--- | :--- | :--- |
-| `/usuarios` y `/usuarios/{id}` | `http://usuarios:5000` | `GET`, `POST`, `PUT`, `DELETE` |
-| `/login` | `http://usuarios:5000` | `POST` |
-| `/reservas` y `/reservas/{id}` | `http://reservas:5000` | `GET`, `POST`, `DELETE` |
-| `/reservas/usuario/{usuario_id}` | `http://reservas:5000` | `GET` |
-| `/reservas/{id}/detalles` | `http://reservas:5000` | `GET` |
-| `/reservas/{id}/estado` | `http://reservas:5000` | `PUT` |
-| `/reservas/circuit-breaker` | `http://reservas:5000` | `GET` |
+El servicio `gateway` (`reserva_hotel/gateway/app.py`) centraliza el acceso de los clientes externos en `http://localhost:5000`:
+* **Desacoplamiento:** El frontend y los clientes HTTP solo conocen `localhost:5000`, sin acoplarse a los puertos internos de cada microservicio.
+* **Preservación de contratos:** Reenvía métodos (`GET`, `POST`, `PUT`, `DELETE`), parámetros de consulta (`query params`), cuerpos JSON y códigos de estado exactos (`200`, `201`, `400`, `401`, `404`, `409`, `500`).
+* **Gestión de errores de red:** Captura `requests.exceptions.Timeout` (`504`) y `requests.exceptions.ConnectionError` (`503`) devolviendo respuestas JSON controladas.
 
 ---
 
 ## 10. Docker Compose y ejecución
 
-### Variables de entorno (`.env.example`)
-```env
-USUARIOS_SERVICE_URL=http://usuarios:5000
-RESERVAS_SERVICE_URL=http://reservas:5000
+### Archivo `.env.example`
+Las credenciales y URLs internas se gestionan mediante variables de entorno (sin subir `.env` con secretos reales a GitHub):
 
+```env
+USUARIOS_URL=http://usuarios:5000
+RESERVAS_URL=http://reservas:5000
+HABITACIONES_URL=http://habitaciones:5000
+
+# Base de datos del servicio Reservas
 DB_HOST_RESERVAS=mysql_reservas
 DB_PORT_RESERVAS=3306
 DB_USER_RESERVAS=root
 DB_PASSWORD_RESERVAS=root
 DB_NAME_RESERVAS=db_reservas
 
+# Base de datos del servicio Usuarios
 DB_HOST_USUARIOS=mysql_usuarios
 DB_PORT_USUARIOS=3306
 DB_USER_USUARIOS=root
 DB_PASSWORD_USUARIOS=root
 DB_NAME_USUARIOS=db_usuarios
+
+# Base de datos del servicio Habitaciones
+DB_HOST_HABITACIONES=mysql_habitaciones
+DB_PORT_HABITACIONES=3306
+DB_USER_HABITACIONES=root
+DB_PASSWORD_HABITACIONES=root
+DB_NAME_HABITACIONES=db_habitaciones
+
+# Tolerancia a fallos (Timeouts y Circuit Breaker)
+USUARIOS_TIMEOUT=2
+HABITACIONES_TIMEOUT=2
+CB_MAX_FALLOS=3
+CB_RECUPERACION=30
 ```
 
-### Procedimiento de ejecución
+### Despliegue paso a paso
+
 ```bash
-# 1. Crear archivo de entorno
+# 1. Ubicarse en la carpeta del proyecto Docker
+cd reserva_hotel
+
+# 2. Preparar archivo de variables de entorno
 cp .env.example .env
 
-# 2. Construir y levantar toda la arquitectura en segundo plano
+# 3. Construir imágenes y levantar los 7 contenedores en segundo plano
 docker compose up -d --build
 
-# 3. Verificar estado de los 6 contenedores
+# 4. Verificar que todos los servicios estén activos (Up)
 docker compose ps
 ```
-- **Vista Home:** `http://localhost:8080`
-- **API Gateway:** `http://localhost:5000`
-- **Detener sin borrar datos:** `docker compose down`
+
+* **API Gateway:** `http://localhost:5000` (Healthcheck: `http://localhost:5000/health`)
+* **Vista Home:** Abrir `reserva_hotel/index.html` en el navegador (conectado a `http://localhost:5000`).
+* **Comunicación interna vs. puertos externos:** Dentro de Docker Compose los contenedores se comunican por red interna usando su nombre de servicio en el puerto interno `5000` (microservicios) y `3306` (MySQL). Solo es indispensable exponer hacia el host el puerto `5000` del **API Gateway**; los puertos `5001`–`5003` y `3309`–`3311` se mantienen mapeados únicamente para depuración y sustentación directa.
 
 ---
 
@@ -179,58 +279,64 @@ docker compose ps
 
 | Prueba | Resultado esperado | Resultado obtenido | Evidencia |
 | :--- | :--- | :--- | :--- |
-| **Arquitectura completa** | Todos los servicios definidos (`home`, `gateway`, `usuarios`, `reservas`, BDs) implementados. | Cumplido | `docs/arquitectura/` |
-| **Docker Compose** | 6 contenedores levantados en la red `hotel_net` sin errores. | Cumplido | `docs/pruebas/docker_ps.png` |
-| **CRUD Usuarios** | Ciclo completo `POST` (201) → `GET` (200) → `PUT` (200) → `DELETE` (200) → `GET` inexistente (404). | Cumplido | `docs/pruebas/crud_usuarios.png` |
-| **CRUD Reservas** | Ciclo completo `POST` (201) → `GET` (200) → `PUT /estado` (200) → `DELETE` (200) → `GET` inexistente (404). | Cumplido | `docs/pruebas/crud_reservas.png` |
-| **Bases de datos** | Datos conservados tras `docker compose stop usuarios reservas` y recreación. | Cumplido | `docs/pruebas/persistencia.png` |
-| **Comunicación HTTP** | `GET /reservas/{id}/detalles` retorna datos de reserva + nombre y correo desde `usuarios`. | Cumplido | `docs/pruebas/comunicacion.png` |
-| **Timeout** | Demora mayor a 3 s en `usuarios` retorna error controlado `504 Gateway Timeout`. | Cumplido | `docs/pruebas/timeout.png` |
-| **Circuit Breaker CLOSED** | Con `usuarios` activo, el estado es `CLOSED` y las peticiones pasan normalmente. | Cumplido | `docs/pruebas/cb_closed.png` |
-| **Circuit Breaker OPEN** | Tras detener `usuarios` (`docker compose stop usuarios`) y generar 3 fallos, cambia a `OPEN` y responde `503`. | Cumplido | `docs/pruebas/cb_open.png` |
-| **Recuperación (HALF_OPEN → CLOSED)** | Al iniciar `usuarios` (`docker compose start usuarios`) y pasar 15 s, prueba con `HALF_OPEN` y vuelve a `CLOSED`. | Cumplido | `docs/pruebas/cb_recovery.png` |
-| **API Gateway** | Todas las operaciones de `usuarios` y `reservas` funcionan desde `http://localhost:5000`. | Cumplido | `docs/pruebas/gateway.png` |
-| **Vista Home** | Inicio de sesión, creación y consulta de reservas desde `http://localhost:8080` vía Gateway. | Cumplido | `docs/pruebas/home_integrado.png` |
+| **Arquitectura completa** | Todos los servicios (`gateway`, `usuarios`, `reservas`, `habitaciones`, 3 BDs y `index.html`) implementados e integrados. | Cumplido | `docs/arquitectura.md` |
+| **Docker Compose** | 7 contenedores ejecutándose correctamente con `docker compose ps`. | Cumplido | `docs/pruebas/docker_ps.png` |
+| **CRUD Usuarios** | `POST` (`201`) → `GET` (`200`) → `PUT` (`200`) → `DELETE` (`200`) → `GET` inexistente (`404`). | Cumplido | `docs/pruebas/crud_usuarios.png` |
+| **CRUD Habitaciones** | `POST` (`201`) → `GET` (`200`) → `PUT` (`200`) → `DELETE` (`200`) → `GET` inexistente (`404`). | Cumplido | `docs/pruebas/crud_habitaciones.png` |
+| **CRUD Reservas** | `POST` (`201`) → `GET` (`200`) → `PUT /estado` (`200`) → `DELETE` (`200`) → `GET` inexistente (`404`). | Cumplido | `docs/pruebas/crud_reservas.png` |
+| **Bases de datos y persistencia** | Datos conservados tras detener y recrear contenedores sin eliminar volúmenes. | Cumplido | `docs/pruebas/persistencia.png` |
+| **Comunicación HTTP** | `POST /reservas` valida y ocupa habitación; `GET /reservas/{id}/detalles` consolida reserva, usuario y habitación. | Cumplido | `docs/pruebas/comunicacion_http.png` |
+| **Timeout** | Demora superior a `2 s` en Usuarios o Habitaciones devuelve error controlado `504 Gateway Timeout`. | Cumplido | `docs/pruebas/timeout.png` |
+| **Circuit Breaker CLOSED** | En operación normal el circuito está en `CLOSED` y permite solicitudes. | Cumplido | `docs/pruebas/cb_closed.png` |
+| **Circuit Breaker OPEN** | Tras detener un servicio y alcanzar 3 fallos, cambia a `OPEN` y rechaza con `503`. | Cumplido | `docs/pruebas/cb_open.png` |
+| **Recuperación (HALF_OPEN → CLOSED)** | Al reiniciar el servicio y cumplirse `30 s`, prueba en `HALF_OPEN` y retorna a `CLOSED`. | Cumplido | `docs/pruebas/cb_recovery.png` |
+| **API Gateway** | Todas las rutas de Usuarios, Habitaciones y Reservas operan desde `http://localhost:5000`. | Cumplido | `docs/pruebas/gateway.png` |
+| **Vista Home integrada** | Login, consulta de habitaciones disponibles, reserva y gestión por roles desde `index.html` vía Gateway. | Cumplido | `docs/pruebas/home_integrado.png` |
 
 ---
 
-## 12. Estado actual y equipo
+## 12. Estado actual, estructura y equipo
 
 ### Funcionalidades terminadas
-- Microservicios `usuarios` y `reservas` con operaciones CRUD completas y bases de datos MySQL independientes.
-- Integración centralizada mediante `API Gateway` (`:5000`) y contenedor web `Home` (`:8080`).
-- Tolerancia a fallos con `Timeout` (3 s) y `Circuit Breaker` (`CLOSED`, `OPEN`, `HALF_OPEN`).
-- Persistencia mediante volúmenes Docker y aislamiento de puertos internos.
+* Implementación completa de los microservicios **Usuarios**, **Habitaciones** y **Reservas** con operaciones CRUD y bases de datos MySQL 8 independientes.
+* Integración centralizada mediante **API Gateway** (`:5000`) y **Vista Home** (`index.html`).
+* Tolerancia a fallos mediante **Timeout** (`2 s` / `5 s`) y doble **Circuit Breaker** (`pybreaker`) con estados `CLOSED`, `OPEN` y `HALF_OPEN`.
+* Persistencia con volúmenes Docker y documentación técnica actualizada.
 
 ### Aspectos pendientes (mejoras futuras)
-- Encriptación de contraseñas con hashing (`bcrypt`) y tokens JWT.
-- Incorporación de un servicio de notificaciones por correo al confirmar o cancelar reservas.
+* Hashing seguro de contraseñas (`bcrypt`) y autenticación basada en tokens JWT.
+* Servicio asíncrono de notificaciones por correo electrónico al confirmar o cancelar reservas.
 
 ### Estructura del repositorio
 ```text
-reserva_hotel/
-├── home/
-│   └── index.html
-├── gateway/
-│   ├── app.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── usuarios/
-│   ├── app.py
-│   ├── database.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── reservas/
-│   ├── app.py
-│   ├── database.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── bases_datos/
+reservas_hotel/
 ├── docs/
-│   ├── arquitectura/
-│   ├── endpoints/
+│   ├── arquitectura.md
+│   ├── definición_servicios.md
 │   └── pruebas/
-├── docker-compose.yml
-├── .env.example
+├── reserva_hotel/
+│   ├── gateway/
+│   │   ├── app.py
+│   │   ├── dockerfile
+│   │   └── requirements.txt
+│   ├── usuarios/
+│   │   ├── app.py
+│   │   ├── database.py
+│   │   ├── dockerfile
+│   │   └── requirements.txt
+│   ├── habitaciones/
+│   │   ├── app.py
+│   │   ├── database.py
+│   │   ├── dockerfile
+│   │   └── requirements.txt
+│   ├── reservas/
+│   │   ├── app.py
+│   │   ├── database.py
+│   │   ├── dockerfile
+│   │   └── requirements.txt
+│   ├── index.html
+│   ├── docker-compose.yml
+│   ├── .env.example
+│   └── .env
 └── README.md
 ```
