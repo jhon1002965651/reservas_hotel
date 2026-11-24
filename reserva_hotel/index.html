@@ -18,6 +18,7 @@
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="#catalogo-habitaciones" onclick="mostrarInicio()">Habitaciones</a></li>
                     <li class="nav-item"><a class="nav-link" href="#mision-vision" onclick="mostrarInicio()">Misión y Visión</a></li>
                 </ul>
                 <div id="usuarioNavInfo" class="d-flex align-items-center gap-3">
@@ -38,6 +39,22 @@
                 <button class="btn btn-primary btn-lg mt-2" data-bs-toggle="modal" data-bs-target="#modalLogin">
                     <i class="bi bi-box-arrow-in-right"></i> Iniciar Sesión
                 </button>
+            </div>
+
+            <!-- CATÁLOGO PÚBLICO DE HABITACIONES (MICROSERVICIO HABITACIONES) -->
+            <div class="card border-0 shadow-sm my-4" id="catalogo-habitaciones">
+                <div class="card-header bg-dark text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <span class="fw-bold"><i class="bi bi-door-open"></i> Nuestras Habitaciones</span>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-light active" id="btnFiltroTodas" onclick="cargarCatalogoPublico('')">Todas</button>
+                        <button type="button" class="btn btn-outline-light" id="btnFiltroDisp" onclick="cargarCatalogoPublico('disponible')">Solo Disponibles</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3" id="gridHabitacionesPublicas">
+                        <div class="col-12 text-center text-muted py-3">Cargando catálogo de habitaciones...</div>
+                    </div>
+                </div>
             </div>
 
             <div class="row g-4 my-2" id="mision-vision">
@@ -66,17 +83,23 @@
 
         <!-- 2. PANEL CLIENTE -->
         <div id="vistaCliente" class="d-none">
+            <div id="alertaCliente" class="alert d-none" role="alert"></div>
+
             <div class="row g-4">
+                <!-- FORMULARIO REALIZAR RESERVA -->
                 <div class="col-md-4">
-                    <div class="card shadow-sm border-0">
+                    <div class="card shadow-sm border-0 mb-4">
                         <div class="card-header bg-primary text-white fw-bold">
                             <i class="bi bi-calendar-plus"></i> Realizar Reserva
                         </div>
                         <div class="card-body">
                             <form id="formReservaCliente">
                                 <div class="mb-3">
-                                    <label class="form-label">Habitación</label>
-                                    <input type="text" id="cliHabitacion" class="form-control" placeholder="Ej: 101, Suite Master" required>
+                                    <label class="form-label">Habitación Disponible</label>
+                                    <select id="cliHabitacion" class="form-select" required>
+                                        <option value="">Cargando habitaciones...</option>
+                                    </select>
+                                    <div class="form-text" id="infoHabitacionSeleccionada"></div>
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Fecha deseada</label>
@@ -87,11 +110,13 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- HISTORIAL DE RESERVAS Y HABITACIONES DISPONIBLES -->
                 <div class="col-md-8">
-                    <div class="card shadow-sm border-0">
+                    <div class="card shadow-sm border-0 mb-4">
                         <div class="card-header bg-dark text-white fw-bold d-flex justify-content-between align-items-center">
                             <span><i class="bi bi-journal-bookmark"></i> Mi Historial de Reservas</span>
-                            <button onclick="cargarReservasCliente()" class="btn btn-sm btn-outline-light">Actualizar</button>
+                            <button onclick="cargarPanelCliente()" class="btn btn-sm btn-outline-light">Actualizar</button>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
@@ -110,37 +135,164 @@
                             </div>
                         </div>
                     </div>
+
+                    <div class="card shadow-sm border-0">
+                        <div class="card-header bg-success text-white fw-bold d-flex justify-content-between align-items-center">
+                            <span><i class="bi bi-door-open"></i> Habitaciones Disponibles Hoy</span>
+                            <button onclick="cargarHabitacionesCliente()" class="btn btn-sm btn-outline-light">Refrescar</button>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-hover align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th>Número</th>
+                                            <th>Tipo</th>
+                                            <th>Capacidad</th>
+                                            <th>Precio / Noche</th>
+                                            <th>Descripción</th>
+                                            <th>Acción</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tablaHabitacionesCliente"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- 3. PANEL ADMINISTRADOR -->
         <div id="vistaAdmin" class="d-none">
-            <div class="card shadow-sm border-0 mb-4">
-                <div class="card-header bg-dark text-white fw-bold d-flex justify-content-between align-items-center">
-                    <span><i class="bi bi-shield-check"></i> Gestión Global de Reservas y Clientes</span>
-                    <button onclick="cargarReservasAdmin()" class="btn btn-sm btn-outline-light">Refrescar</button>
-                </div>
-                <div class="card-body">
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <input type="text" id="buscarClienteDoc" class="form-control" placeholder="Buscar por Documento de Cliente..." onkeyup="filtrarTablaAdmin()">
+            <ul class="nav nav-tabs mb-4" id="adminTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active fw-bold" id="tab-reservas-btn" data-bs-toggle="tab" data-bs-target="#tabReservasAdmin" type="button" role="tab">
+                        <i class="bi bi-shield-check"></i> Gestión de Reservas
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link fw-bold" id="tab-habitaciones-btn" data-bs-toggle="tab" data-bs-target="#tabHabitacionesAdmin" type="button" role="tab" onclick="cargarHabitacionesAdmin()">
+                        <i class="bi bi-door-closed"></i> Gestión de Habitaciones
+                    </button>
+                </li>
+            </ul>
+
+            <div class="tab-content">
+                <!-- TAB 1: GESTIÓN DE RESERVAS -->
+                <div class="tab-pane fade show active" id="tabReservasAdmin" role="tabpanel">
+                    <div class="card shadow-sm border-0 mb-4">
+                        <div class="card-header bg-dark text-white fw-bold d-flex justify-content-between align-items-center">
+                            <span><i class="bi bi-shield-check"></i> Gestión Global de Reservas y Clientes</span>
+                            <button onclick="cargarReservasAdmin()" class="btn btn-sm btn-outline-light">Refrescar</button>
+                        </div>
+                        <div class="card-body">
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <input type="text" id="buscarClienteDoc" class="form-control" placeholder="Buscar por Documento de Cliente..." onkeyup="filtrarTablaAdmin()">
+                                </div>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-striped align-middle" id="tablaAdminReservas">
+                                    <thead>
+                                        <tr>
+                                            <th># Reserva</th>
+                                            <th>Doc. Cliente</th>
+                                            <th>Habitación</th>
+                                            <th>Fecha</th>
+                                            <th>Estado Actual</th>
+                                            <th>Cambiar Estado</th>
+                                            <th>Detalles</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="bodyAdminReservas"></tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
-                    <div class="table-responsive">
-                        <table class="table table-striped align-middle" id="tablaAdminReservas">
-                            <thead>
-                                <tr>
-                                    <th># Reserva</th>
-                                    <th>Doc. Cliente</th>
-                                    <th>Habitación</th>
-                                    <th>Fecha</th>
-                                    <th>Estado Actual</th>
-                                    <th>Cambiar Estado</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bodyAdminReservas"></tbody>
-                        </table>
+                </div>
+
+                <!-- TAB 2: GESTIÓN DE HABITACIONES (MICROSERVICIO HABITACIONES) -->
+                <div class="tab-pane fade" id="tabHabitacionesAdmin" role="tabpanel">
+                    <div class="row g-4">
+                        <div class="col-md-4">
+                            <div class="card shadow-sm border-0">
+                                <div class="card-header bg-primary text-white fw-bold" id="tituloFormHabitacion">
+                                    <i class="bi bi-plus-circle"></i> Registrar Nueva Habitación
+                                </div>
+                                <div class="card-body">
+                                    <form id="formHabitacionAdmin">
+                                        <input type="hidden" id="habEditId">
+                                        <div class="mb-2">
+                                            <label class="form-label mb-1">Número de Habitación</label>
+                                            <input type="text" id="habNumero" class="form-control" required placeholder="Ej: 103">
+                                        </div>
+                                        <div class="mb-2">
+                                            <label class="form-label mb-1">Tipo</label>
+                                            <select id="habTipo" class="form-select" required>
+                                                <option value="Sencilla">Sencilla</option>
+                                                <option value="Doble">Doble</option>
+                                                <option value="Suite">Suite</option>
+                                                <option value="Suite Master">Suite Master</option>
+                                                <option value="Familiar">Familiar</option>
+                                            </select>
+                                        </div>
+                                        <div class="row g-2 mb-2">
+                                            <div class="col-6">
+                                                <label class="form-label mb-1">Capacidad</label>
+                                                <input type="number" id="habCapacidad" class="form-control" min="1" max="10" value="2" required>
+                                            </div>
+                                            <div class="col-6">
+                                                <label class="form-label mb-1">Precio / Noche</label>
+                                                <input type="number" id="habPrecio" class="form-control" min="0" step="1000" required placeholder="150000">
+                                            </div>
+                                        </div>
+                                        <div class="mb-2">
+                                            <label class="form-label mb-1">Estado</label>
+                                            <select id="habEstado" class="form-select">
+                                                <option value="disponible">Disponible</option>
+                                                <option value="ocupada">Ocupada</option>
+                                                <option value="mantenimiento">Mantenimiento</option>
+                                            </select>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label mb-1">Descripción</label>
+                                            <textarea id="habDescripcion" class="form-control" rows="2" placeholder="Características de la habitación..."></textarea>
+                                        </div>
+                                        <div class="d-grid gap-2">
+                                            <button type="submit" class="btn btn-primary" id="btnGuardarHabitacion">Guardar Habitación</button>
+                                            <button type="button" class="btn btn-outline-secondary d-none" id="btnCancelarEdicionHab" onclick="resetFormHabitacion()">Cancelar Edición</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-8">
+                            <div class="card shadow-sm border-0">
+                                <div class="card-header bg-dark text-white fw-bold d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-building-gear"></i> Inventario de Habitaciones</span>
+                                    <button onclick="cargarHabitacionesAdmin()" class="btn btn-sm btn-outline-light">Actualizar</button>
+                                </div>
+                                <div class="card-body">
+                                    <div class="table-responsive">
+                                        <table class="table table-hover align-middle">
+                                            <thead>
+                                                <tr>
+                                                    <th>Número</th>
+                                                    <th>Tipo</th>
+                                                    <th>Cap.</th>
+                                                    <th>Precio</th>
+                                                    <th>Estado</th>
+                                                    <th>Acciones</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="tablaHabitacionesAdmin"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -241,13 +393,47 @@
         </div>
     </div>
 
+    <!-- MODAL DETALLES DE RESERVA (UNE RESERVAS + USUARIOS + HABITACIONES) -->
+    <div class="modal fade" id="modalDetalleReserva" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title"><i class="bi bi-info-circle"></i> Detalle Consolidado de Reserva</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="contenidoDetalleReserva">
+                    Cargando información...
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- SCRIPTS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const API_USUARIOS = 'http://localhost:5001';
-        const API_RESERVAS = 'http://localhost:5002';
+        // Conexión centralizada a través del API Gateway (puerto 5000)
+        const API_GATEWAY = 'http://localhost:5000';
+        const API_USUARIOS = API_GATEWAY;
+        const API_RESERVAS = API_GATEWAY;
+        const API_HABITACIONES = API_GATEWAY;
 
         let usuarioActual = JSON.parse(sessionStorage.getItem('usuarioSesion')) || null;
+        let listaHabitacionesCache = [];
+
+        function formatearMoneda(valor) {
+            return new Intl.NumberFormat('es-CO', {
+                style: 'currency',
+                currency: 'COP',
+                maximumFractionDigits: 0
+            }).format(valor || 0);
+        }
+
+        function badgeEstadoHabitacion(estado) {
+            const est = (estado || '').toLowerCase();
+            if (est === 'disponible') return '<span class="badge bg-success">DISPONIBLE</span>';
+            if (est === 'ocupada') return '<span class="badge bg-danger">OCUPADA</span>';
+            return `<span class="badge bg-warning text-dark">${est.toUpperCase()}</span>`;
+        }
 
         // --- INICIALIZACIÓN ---
         document.addEventListener('DOMContentLoaded', () => {
@@ -256,7 +442,7 @@
 
         function evaluarSesion() {
             const navContainer = document.getElementById('usuarioNavInfo');
-            
+
             // Ocultar todas las vistas
             document.getElementById('vistaInicio').classList.add('d-none');
             document.getElementById('vistaCliente').classList.add('d-none');
@@ -266,6 +452,7 @@
             if (!usuarioActual) {
                 // Estado público
                 document.getElementById('vistaInicio').classList.remove('d-none');
+                cargarCatalogoPublico('');
                 navContainer.innerHTML = `
                     <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#modalLogin">
                         <i class="bi bi-box-arrow-in-right"></i> Iniciar Sesión
@@ -284,10 +471,11 @@
 
                 if (usuarioActual.rol === 'cliente') {
                     document.getElementById('vistaCliente').classList.remove('d-none');
-                    cargarReservasCliente();
+                    cargarPanelCliente();
                 } else if (usuarioActual.rol === 'admin') {
                     document.getElementById('vistaAdmin').classList.remove('d-none');
                     cargarReservasAdmin();
+                    cargarHabitacionesAdmin();
                 } else if (usuarioActual.rol === 'sysadmin') {
                     document.getElementById('vistaSysadmin').classList.remove('d-none');
                     cargarUsuariosSysadmin();
@@ -298,6 +486,50 @@
         function mostrarInicio() {
             if (!usuarioActual) {
                 document.getElementById('vistaInicio').classList.remove('d-none');
+                cargarCatalogoPublico('');
+            }
+        }
+
+        // --- CATÁLOGO PÚBLICO DE HABITACIONES ---
+        async function cargarCatalogoPublico(estadoFiltro = '') {
+            document.getElementById('btnFiltroTodas').classList.toggle('active', estadoFiltro === '');
+            document.getElementById('btnFiltroDisp').classList.toggle('active', estadoFiltro === 'disponible');
+
+            const grid = document.getElementById('gridHabitacionesPublicas');
+            try {
+                const url = estadoFiltro
+                    ? `${API_HABITACIONES}/habitaciones?estado=${encodeURIComponent(estadoFiltro)}`
+                    : `${API_HABITACIONES}/habitaciones`;
+                const res = await fetch(url);
+                const habitaciones = await res.json();
+
+                if (!Array.isArray(habitaciones) || habitaciones.length === 0) {
+                    grid.innerHTML = '<div class="col-12 text-center text-muted py-3">No hay habitaciones registradas con ese filtro.</div>';
+                    return;
+                }
+
+                grid.innerHTML = habitaciones.map(h => `
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card h-100 border shadow-sm">
+                            <div class="card-body d-flex flex-column">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <h5 class="card-title fw-bold mb-0">Hab. ${h.numero}</h5>
+                                    ${badgeEstadoHabitacion(h.estado)}
+                                </div>
+                                <span class="badge bg-secondary align-self-start mb-2">${h.tipo} · ${h.capacidad} pers.</span>
+                                <p class="card-text text-muted small flex-grow-1">${h.descripcion || 'Sin descripción adicional.'}</p>
+                                <div class="mt-2 pt-2 border-top d-flex justify-content-between align-items-center">
+                                    <strong class="text-primary">${formatearMoneda(h.precio)}<small class="text-muted fw-normal">/noche</small></strong>
+                                    ${h.estado === 'disponible'
+                                        ? `<button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#modalLogin">Reservar</button>`
+                                        : `<button class="btn btn-sm btn-outline-secondary" disabled>No disponible</button>`}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                grid.innerHTML = '<div class="col-12 text-center text-danger py-3">No se pudo cargar el catálogo de habitaciones desde el Gateway.</div>';
             }
         }
 
@@ -328,7 +560,7 @@
                     errDiv.classList.remove('d-none');
                 }
             } catch (error) {
-                errDiv.innerText = 'Error al conectar con el servidor de Usuarios';
+                errDiv.innerText = 'Error al conectar con el API Gateway / Usuarios';
                 errDiv.classList.remove('d-none');
             }
         });
@@ -340,6 +572,62 @@
         }
 
         // --- VISTA CLIENTE ---
+        function mostrarAlertaCliente(mensaje, tipo = 'success') {
+            const alerta = document.getElementById('alertaCliente');
+            alerta.className = `alert alert-${tipo}`;
+            alerta.innerText = mensaje;
+            alerta.classList.remove('d-none');
+            setTimeout(() => alerta.classList.add('d-none'), 4000);
+        }
+
+        async function cargarPanelCliente() {
+            await Promise.all([cargarReservasCliente(), cargarHabitacionesCliente()]);
+        }
+
+        async function cargarHabitacionesCliente() {
+            try {
+                const res = await fetch(`${API_HABITACIONES}/habitaciones?estado=disponible`);
+                const habitaciones = await res.json();
+                const select = document.getElementById('cliHabitacion');
+                const tbody = document.getElementById('tablaHabitacionesCliente');
+
+                select.innerHTML = '';
+                tbody.innerHTML = '';
+
+                if (!Array.isArray(habitaciones) || habitaciones.length === 0) {
+                    select.innerHTML = '<option value="">No hay habitaciones disponibles</option>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No hay habitaciones disponibles en este momento.</td></tr>';
+                    return;
+                }
+
+                select.innerHTML = '<option value="" disabled selected>Seleccione una habitación...</option>';
+                habitaciones.forEach(h => {
+                    select.innerHTML += `<option value="${h.numero}">Hab. ${h.numero} - ${h.tipo} (${h.capacidad} pers.) - ${formatearMoneda(h.precio)}</option>`;
+                    tbody.innerHTML += `
+                        <tr>
+                            <td><strong>${h.numero}</strong></td>
+                            <td>${h.tipo}</td>
+                            <td>${h.capacidad} pers.</td>
+                            <td>${formatearMoneda(h.precio)}</td>
+                            <td class="small text-muted">${h.descripcion || '-'}</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="seleccionarHabitacionCliente('${h.numero}')">
+                                    Seleccionar
+                                </button>
+                            </td>
+                        </tr>`;
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function seleccionarHabitacionCliente(numero) {
+            const select = document.getElementById('cliHabitacion');
+            select.value = numero;
+            select.focus();
+        }
+
         async function cargarReservasCliente() {
             try {
                 const res = await fetch(`${API_RESERVAS}/reservas/usuario/${usuarioActual.id}`);
@@ -351,7 +639,7 @@
                     tbody.innerHTML += `
                         <tr>
                             <td>#${r.id}</td>
-                            <td>${r.habitacion}</td>
+                            <td><strong>Hab. ${r.habitacion}</strong></td>
                             <td>${r.fecha_reserva}</td>
                             <td><span class="badge ${badge}">${r.estado.toUpperCase()}</span></td>
                             <td>
@@ -369,24 +657,37 @@
             const habitacion = document.getElementById('cliHabitacion').value;
             const fecha_reserva = document.getElementById('cliFecha').value;
 
-            await fetch(`${API_RESERVAS}/reservas`, {
+            const res = await fetch(`${API_RESERVAS}/reservas`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ habitacion, fecha_reserva, usuario_id: usuarioActual.id })
             });
 
-            document.getElementById('formReservaCliente').reset();
-            cargarReservasCliente();
+            const data = await res.json();
+            if (res.ok) {
+                mostrarAlertaCliente(`Reserva #${data.id} creada para la habitación ${habitacion}.`, 'success');
+                document.getElementById('formReservaCliente').reset();
+                cargarPanelCliente();
+            } else {
+                mostrarAlertaCliente(data.error || 'No se pudo completar la reserva', 'danger');
+                cargarHabitacionesCliente();
+            }
         });
 
         async function eliminarReservaCliente(id) {
-            if (confirm('¿Deseas cancelar esta reserva?')) {
-                await fetch(`${API_RESERVAS}/reservas/${id}`, { method: 'DELETE' });
-                cargarReservasCliente();
-            }
+    if (confirm('¿Deseas cancelar esta reserva? La habitación quedará disponible nuevamente.')) {
+        const res = await fetch(`${API_RESERVAS}/reservas/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            mostrarAlertaCliente('Reserva cancelada y habitación liberada.', 'info');
+            cargarPanelCliente();
+        } else {
+            mostrarAlertaCliente(data.error || 'No se pudo cancelar la reserva', 'danger');
         }
+    }
+}
 
-        // --- VISTA ADMINISTRADOR ---
+        // --- VISTA ADMINISTRADOR: RESERVAS ---
         async function cargarReservasAdmin() {
             try {
                 const res = await fetch(`${API_RESERVAS}/reservas`);
@@ -399,7 +700,7 @@
                         <tr>
                             <td>#${r.id}</td>
                             <td><strong>${r.usuario_id}</strong></td>
-                            <td>${r.habitacion}</td>
+                            <td>Hab. ${r.habitacion}</td>
                             <td>${r.fecha_reserva}</td>
                             <td><span class="badge ${badge}">${r.estado.toUpperCase()}</span></td>
                             <td>
@@ -410,10 +711,57 @@
                                     <option value="cancelada">Cancelada</option>
                                 </select>
                             </td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-dark" onclick="verDetalleReserva(${r.id})">
+                                    <i class="bi bi-eye"></i>
+                                </button>
+                            </td>
                         </tr>`;
                 });
             } catch (e) {
                 console.error(e);
+            }
+        }
+
+        async function verDetalleReserva(id) {
+            const modalEl = document.getElementById('modalDetalleReserva');
+            const modal = new bootstrap.Modal(modalEl);
+            const cuerpo = document.getElementById('contenidoDetalleReserva');
+            cuerpo.innerHTML = 'Consultando microservicios Reservas, Usuarios y Habitaciones...';
+            modal.show();
+
+            try {
+                const res = await fetch(`${API_RESERVAS}/reservas/${id}/detalles`);
+                const data = await res.json();
+                if (!res.ok) {
+                    cuerpo.innerHTML = `<div class="alert alert-danger mb-0">${data.mensaje || 'Error al obtener detalles'}</div>`;
+                    return;
+                }
+                const r = data.reserva;
+                const u = data.usuario;
+                const h = data.habitacion || {};
+                cuerpo.innerHTML = `
+                    <h6 class="fw-bold text-primary">Reserva #${r.id}</h6>
+                    <ul class="list-group mb-3">
+                        <li class="list-group-item"><strong>Fecha:</strong> ${r.fecha_reserva}</li>
+                        <li class="list-group-item"><strong>Estado:</strong> ${r.estado.toUpperCase()}</li>
+                    </ul>
+                    <h6 class="fw-bold text-success">Cliente (Microservicio Usuarios)</h6>
+                    <ul class="list-group mb-3">
+                        <li class="list-group-item"><strong>Documento:</strong> ${u.id}</li>
+                        <li class="list-group-item"><strong>Nombre:</strong> ${u.nombre}</li>
+                        <li class="list-group-item"><strong>Correo:</strong> ${u.correo}</li>
+                    </ul>
+                    <h6 class="fw-bold text-dark">Habitación (Microservicio Habitaciones)</h6>
+                    <ul class="list-group">
+                        <li class="list-group-item"><strong>Número:</strong> ${h.numero || r.habitacion}</li>
+                        <li class="list-group-item"><strong>Tipo:</strong> ${h.tipo || 'N/A'}</li>
+                        <li class="list-group-item"><strong>Precio:</strong> ${h.precio ? formatearMoneda(h.precio) : 'N/A'}</li>
+                        <li class="list-group-item"><strong>Estado actual:</strong> ${(h.estado || 'desconocido').toUpperCase()}</li>
+                    </ul>
+                `;
+            } catch (e) {
+                cuerpo.innerHTML = '<div class="alert alert-danger mb-0">Error de conexión con el Gateway.</div>';
             }
         }
 
@@ -424,6 +772,7 @@
                 body: JSON.stringify({ estado: nuevoEstado })
             });
             cargarReservasAdmin();
+            cargarHabitacionesAdmin();
         }
 
         function filtrarTablaAdmin() {
@@ -433,6 +782,122 @@
                 const doc = f.children[1].innerText.toLowerCase();
                 f.style.display = doc.includes(filtro) ? '' : 'none';
             });
+        }
+
+        // --- VISTA ADMINISTRADOR: HABITACIONES (CRUD) ---
+        async function cargarHabitacionesAdmin() {
+            try {
+                const res = await fetch(`${API_HABITACIONES}/habitaciones`);
+                const habitaciones = await res.json();
+                listaHabitacionesCache = Array.isArray(habitaciones) ? habitaciones : [];
+                const tbody = document.getElementById('tablaHabitacionesAdmin');
+                tbody.innerHTML = '';
+
+                listaHabitacionesCache.forEach(h => {
+                    tbody.innerHTML += `
+                        <tr>
+                            <td><strong>${h.numero}</strong></td>
+                            <td>${h.tipo}</td>
+                            <td>${h.capacidad}</td>
+                            <td>${formatearMoneda(h.precio)}</td>
+                            <td>
+                                <select class="form-select form-select-sm" onchange="cambiarEstadoHabitacionAdmin(${h.id}, this.value)">
+                                    <option value="disponible" ${h.estado === 'disponible' ? 'selected' : ''}>Disponible</option>
+                                    <option value="ocupada" ${h.estado === 'ocupada' ? 'selected' : ''}>Ocupada</option>
+                                    <option value="mantenimiento" ${h.estado === 'mantenimiento' ? 'selected' : ''}>Mantenimiento</option>
+                                </select>
+                            </td>
+                            <td class="text-nowrap">
+                                <button class="btn btn-sm btn-outline-primary me-1" onclick="editarHabitacionAdmin(${h.id})" title="Editar">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" onclick="eliminarHabitacionAdmin(${h.id}, '${h.numero}')" title="Eliminar">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </td>
+                        </tr>`;
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        document.getElementById('formHabitacionAdmin').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const editId = document.getElementById('habEditId').value;
+            const payload = {
+                numero: document.getElementById('habNumero').value.trim(),
+                tipo: document.getElementById('habTipo').value,
+                capacidad: parseInt(document.getElementById('habCapacidad').value, 10),
+                precio: parseFloat(document.getElementById('habPrecio').value),
+                estado: document.getElementById('habEstado').value,
+                descripcion: document.getElementById('habDescripcion').value.trim()
+            };
+
+            const url = editId
+                ? `${API_HABITACIONES}/habitaciones/${editId}`
+                : `${API_HABITACIONES}/habitaciones`;
+            const method = editId ? 'PUT' : 'POST';
+
+            const res = await fetch(url, {
+                method,
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                resetFormHabitacion();
+                cargarHabitacionesAdmin();
+            } else {
+                alert('Error: ' + (data.error || 'No se pudo guardar la habitación'));
+            }
+        });
+
+        function editarHabitacionAdmin(id) {
+            const hab = listaHabitacionesCache.find(h => h.id === id);
+            if (!hab) return;
+
+            document.getElementById('habEditId').value = hab.id;
+            document.getElementById('habNumero').value = hab.numero;
+            document.getElementById('habTipo').value = hab.tipo;
+            document.getElementById('habCapacidad').value = hab.capacidad;
+            document.getElementById('habPrecio').value = hab.precio;
+            document.getElementById('habEstado').value = hab.estado;
+            document.getElementById('habDescripcion').value = hab.descripcion || '';
+
+            document.getElementById('tituloFormHabitacion').innerHTML = `<i class="bi bi-pencil-square"></i> Editando Habitación ${hab.numero}`;
+            document.getElementById('btnGuardarHabitacion').innerText = 'Actualizar Habitación';
+            document.getElementById('btnCancelarEdicionHab').classList.remove('d-none');
+        }
+
+        function resetFormHabitacion() {
+            document.getElementById('formHabitacionAdmin').reset();
+            document.getElementById('habEditId').value = '';
+            document.getElementById('tituloFormHabitacion').innerHTML = '<i class="bi bi-plus-circle"></i> Registrar Nueva Habitación';
+            document.getElementById('btnGuardarHabitacion').innerText = 'Guardar Habitación';
+            document.getElementById('btnCancelarEdicionHab').classList.add('d-none');
+        }
+
+        async function cambiarEstadoHabitacionAdmin(id, nuevoEstado) {
+            await fetch(`${API_HABITACIONES}/habitaciones/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ estado: nuevoEstado })
+            });
+            cargarHabitacionesAdmin();
+        }
+
+        async function eliminarHabitacionAdmin(id, numero) {
+            if (confirm(`¿Eliminar la habitación ${numero}?`)) {
+                const res = await fetch(`${API_HABITACIONES}/habitaciones/${id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    cargarHabitacionesAdmin();
+                } else {
+                    const data = await res.json();
+                    alert('Error: ' + (data.error || 'No se pudo eliminar'));
+                }
+            }
         }
 
         // --- VISTA ADMINISTRADOR DEL SISTEMA (SYSADMIN) ---
