@@ -24,7 +24,7 @@ def obtener_usuarios():
 # 2. OBTENER UN USUARIO POR SU DOCUMENTO DE IDENTIDAD (ID)
 @app.route('/usuarios/<id>', methods=['GET'])
 def obtener_usuario_por_id(id):
-   # time.sleep(5)
+    #time.sleep(5)
     try:
         db = conectar()
         cursor = db.cursor(dictionary=True)

@@ -16,4 +16,4 @@ def conectar():
             return conexion 
         except mysql.connector.Error:
             print("La base de datos de usuarios aún está cargando...")
-            time.sleep(2)
+        

@@ -7,6 +7,7 @@ services:
     environment:
         RESERVAS_URL: ${RESERVAS_URL}
         USUARIOS_URL: ${USUARIOS_URL}
+        HABITACIONES_URL: ${HABITACIONES_URL}
     depends_on:
         - reservas
         - usuarios
@@ -19,6 +20,7 @@ services:
     depends_on:
       - mysql_reservas
       - usuarios
+      - habitaciones
 
   usuarios:
     build: ./usuarios
@@ -30,6 +32,16 @@ services:
       - mysql_usuarios
 
 
+  habitaciones:
+    build: ./habitaciones
+    ports:
+      - "5003:5000"
+    env_file:
+      - .env
+    depends_on:
+      - mysql_habitaciones
+
+
   mysql_reservas:
     image: mysql:8
     environment:
@@ -38,7 +50,7 @@ services:
     ports:
       - "3309:3306"
     volumes:
-      - reservas_mysql_data:/var/lib/mysql # <-- Añadir esto
+      - reservas_mysql_data:/var/lib/mysql 
 
 
   mysql_usuarios:
@@ -50,8 +62,19 @@ services:
       - "3310:3306"
     volumes:
       - usuarios_mysql_data:/var/lib/mysql
+
+  mysql_habitaciones:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: db_habitaciones
+    ports:
+      - "3311:3306"
+    volumes:
+      - habitaciones_mysql_data:/var/lib/mysql
 volumes:
   reservas_mysql_data:
   usuarios_mysql_data:
+  habitaciones_mysql_data:
 
 
